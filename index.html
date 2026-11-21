@@ -39,6 +39,14 @@ body{padding:calc(env(safe-area-inset-top) + 12px) 14px calc(env(safe-area-inset
 .dot{width:14px;height:14px;border-radius:50%;background:var(--line)}
 .dot.on{background:var(--accent)}
 .count{color:var(--muted);font-size:14px}
+.cd{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;justify-content:space-between;margin-top:10px;padding:10px 12px;border-radius:12px;background:var(--accent-soft);color:var(--accent);font-size:15px}
+.cd b{font-size:18px}
+.cd.warn{background:#fff1d6;color:#b26b00}
+.cd.over{background:#fde3e4;color:var(--danger)}
+@media (prefers-color-scheme: dark){.cd.warn{background:#3d2f12;color:#f5b941}.cd.over{background:#4a2629}}
+.cd .btn.link{color:inherit;text-decoration:underline;padding:2px 0}
+.check{display:flex;align-items:center;gap:10px;margin-top:14px;font-size:16px}
+.check input{width:22px;height:22px;accent-color:var(--accent)}
 .recs{list-style:none;margin:12px 0 0;padding:0}
 .recs li{display:flex;justify-content:space-between;align-items:center;padding:9px 2px;border-top:1px solid var(--line);font-size:15px;cursor:pointer}
 .recs li b{font-weight:600}
@@ -95,6 +103,9 @@ const pad = n => String(n).padStart(2, '0');
 const fmt = iso => { const d = new Date(iso); return `${d.getFullYear()}/${pad(d.getMonth()+1)}/${pad(d.getDate())}（${WD[d.getDay()]}）${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 const fmtShort = iso => { const d = new Date(iso); return `${d.getMonth()+1}/${d.getDate()}`; };
 const toLocalInput = iso => { const d = new Date(iso); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+const DAYMS = 86400000;
+const dayNum = d => Math.round(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / DAYMS);
+const ymd = n => { const d = new Date(n * DAYMS); return `${d.getUTCFullYear()}/${pad(d.getUTCMonth()+1)}/${pad(d.getUTCDate())}`; };
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
 // ---- 資料 ----
@@ -107,6 +118,17 @@ let D = load();
 const item = id => D.items.find(i => i.id === id);
 
 // ---- 畫面 ----
+function countdownHTML(it) {
+  if (!it.countdown) return '';
+  const days = it.cdDays || 30;
+  if (!it.records.length) return `<div class="cd"><span>按下第 1 次後開始倒數 ${days} 天</span></div>`;
+  const start = dayNum(new Date(it.records[0])), end = start + days, left = end - dayNum(new Date());
+  const txt = left > 0 ? `剩 <b>${left}</b> 天` : left === 0 ? '<b>今天到期</b>' : `已過期 <b>${-left}</b> 天`;
+  const c = left < 0 ? ' over' : left <= 3 ? ' warn' : '';
+  return `<div class="cd${c}"><span>${txt}（${ymd(end)} 到期）</span>
+    <span>起始 ${ymd(start).slice(5)} <button class="btn link" data-act="rec" data-id="${it.id}" data-i="0">修改</button></span></div>`;
+}
+
 function render() {
   if (!D.items.length) {
     $('list').innerHTML = '<div class="card empty">還沒有項目<br>按右上角「＋ 新增項目」開始</div>';
@@ -124,6 +146,7 @@ function render() {
     return `<div class="card">
       <div class="ihead"><h2>${esc(it.name)}</h2><button class="btn link more" data-act="menu" data-id="${it.id}" aria-label="選項">⋯</button></div>
       <div class="prog"><div class="dots">${dots}</div><span class="count">${n} / ${it.target}</span></div>
+      ${countdownHTML(it)}
       ${btn}
       ${n ? `<ul class="recs">${recs}</ul>` : ''}
       ${n && !done ? `<div class="foot"><span></span><button class="btn link" data-act="undo" data-id="${it.id}">復原上一筆</button></div>` : ''}
@@ -144,6 +167,8 @@ function editItemSheet(it) {
   openSheet(`<h3>${it ? '編輯項目' : '新增項目'}</h3>
     <label>名稱</label><input id="fName" maxlength="40" value="${it ? esc(it.name) : ''}" placeholder="例如：A 項目">
     <label>需要幾次才算完成</label><input id="fTarget" type="number" inputmode="numeric" min="1" max="30" value="${it ? it.target : 6}">
+    <label class="check"><input type="checkbox" id="fCd" ${it && it.countdown ? 'checked' : ''}>從第 1 次的日期開始倒數</label>
+    <label>倒數天數</label><input id="fCdDays" type="number" inputmode="numeric" min="1" max="365" value="${it && it.cdDays ? it.cdDays : 30}">
     <button class="btn block primary" data-act="saveItem" data-id="${it ? it.id : ''}">儲存</button>`);
   setTimeout(() => !it && $('fName').focus(), 300);
 }
@@ -158,10 +183,23 @@ document.addEventListener('click', e => {
   if (act === 'tap' && it && it.records.length < it.target) {
     if (Date.now() - (lastTap[it.id] || 0) < 1500) return;   // 防止連點重複記錄
     lastTap[it.id] = Date.now();
+    if (!it.records.length) {   // 第 1 次：可以選日期，忘記當天記錄也能補
+      openSheet(`<h3>${esc(it.name)}・第 1 次</h3>
+        <label>日期時間（忘記記錄的話可以改成實際那天）</label>
+        <input id="fDate" type="datetime-local" value="${toLocalInput(new Date().toISOString())}" max="${toLocalInput(new Date().toISOString())}">
+        <button class="btn block primary" data-act="firstRec" data-id="${it.id}">確認記錄</button>`);
+      return;
+    }
     it.records.push(new Date().toISOString());
     save(); render();
     if (navigator.vibrate) navigator.vibrate(30);
     toast(it.records.length >= it.target ? `「${it.name}」完成 ${it.target} 次 🎉` : `已記錄第 ${it.records.length} 次`);
+  }
+  if (act === 'firstRec' && it && !it.records.length) {
+    const v = $('fDate').value; if (!v) return;
+    it.records.push(new Date(v).toISOString());
+    save(); render(); closeSheet();
+    toast(it.countdown ? `已記錄第 1 次，開始倒數 ${it.cdDays || 30} 天` : '已記錄第 1 次');
   }
   if (act === 'undo' && it && it.records.length) {
     if (!confirm(`刪除「${it.name}」的第 ${it.records.length} 次紀錄？`)) return;
@@ -181,12 +219,13 @@ document.addEventListener('click', e => {
   if (act === 'saveItem') {
     const name = $('fName').value.trim();
     const target = Math.min(30, Math.max(1, parseInt($('fTarget').value, 10) || 6));
+    const countdown = $('fCd').checked, cdDays = Math.min(365, Math.max(1, parseInt($('fCdDays').value, 10) || 30));
     if (!name) { $('fName').focus(); return; }
     if (it) {
       if (target < it.records.length && !confirm(`目前已有 ${it.records.length} 筆紀錄，改成 ${target} 次會刪掉多出來的紀錄，確定嗎？`)) return;
-      it.name = name; it.target = target; it.records = it.records.slice(0, target);
+      it.name = name; it.target = target; it.countdown = countdown; it.cdDays = cdDays; it.records = it.records.slice(0, target);
     } else {
-      D.items.push({ id: uid(), name, target, records: [], history: [], created: new Date().toISOString() });
+      D.items.push({ id: uid(), name, target, countdown, cdDays, records: [], history: [], created: new Date().toISOString() });
     }
     save(); render(); closeSheet();
   }
